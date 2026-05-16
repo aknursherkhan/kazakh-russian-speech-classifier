@@ -1,142 +1,179 @@
-# Kazakh–Russian Speech Classifier
+# Kazakh-Russian Speech Classifier
 
-A deep learning pipeline for **language identification** from raw audio, built on personal voice message data augmented with Google FLEURS. The project distinguishes between Kazakh and Russian speech using a combination of MFCC-based feature extraction, convolutional networks, and an attentional bidirectional LSTM.
-
----
-
-## 🎯 Project Overview
-
-I speak both Kazakh and Russian fluently, often switching between them depending on who I'm talking to. My international friends struggle to tell which language I'm speaking — so I built a classifier to see if a model could do better.
-
-**Final result:** The Attentional Bi-LSTM achieved **89% test accuracy**, outperforming the CNN baseline (+9%) and the logistic regression baseline by a wide margin.
+An end-to-end ML pipeline for distinguishing Kazakh and Russian speech, built as a personal project using my own voice recordings and the Google FLEURS dataset. Achieved **89% test accuracy** with an Attentional Bi-LSTM on a low-resource, bilingual classification task.
 
 ---
 
-## 🏗️ Architecture
+## Overview
 
-The pipeline has three parallel modeling streams, all trained on the same MFCC-based feature representation:
+**Task:** Binary audio classification - Kazakh (0) vs. Russian (1)  
+**Data:** ~4,800 two-second audio chunks from two sources (personal voice messages + Google FLEURS)  
+**Best model:** Attentional Bi-LSTM with Bahdanau attention - 89% test accuracy  
+**Key insight:** Single-speaker data caused severe overfitting; the critical fix was a data-centric pivot to integrate multi-speaker FLEURS data, not more model capacity.
+
+---
+
+## Project Journey (Iterative Design)
+
+This project went through three major iterations, each motivated by a concrete failure.
+
+### Draft 1 - Baseline
+- Personal voice messages only (~single speaker)
+- CNN and standard BiLSTM trained on MFCC features
+- Best result: ~62–64% test accuracy despite high validation accuracy → clear overfitting to speaker identity
+
+### Draft 2 - More Epochs, Bigger Models (Experiment 1 & 2)
+- Increased training from 15 → 2,000 epochs
+- Added deeper CNN layers and larger hidden dimensions
+- Result: validation accuracy improved, but test accuracy plateaued at ~64% with widening train/val gap
+- **Conclusion:** The model was memorizing microphone noise, not learning language features. More capacity made it worse.
+
+### Draft 3 (Final) - Data-Centric Pivot + Architectural Upgrade
+- Integrated Google FLEURS (300+ speakers, studio audio) via streaming pipeline
+- Combined with personal recordings → composite dataset with acoustic diversity
+- Replaced standard BiLSTM with Attentional Bi-LSTM (Bahdanau attention)
+- Added Seq2Seq autoencoder for unsupervised representation learning
+- **Result: 89% test accuracy, +27% generalization improvement**
+
+---
+
+## Pipeline
 
 ```
-Raw Audio (.wav)
-      │
-      ▼
-  Preprocessing
-  (16kHz mono → 2s chunks, 25% overlap)
-      │
-      ▼
-  MFCC Extraction (40 coefficients, normalized)
-      │
-  ┌───┴──────────────────────────────┐
-  │                                  │
-  ▼                                  ▼
-Improved CNN                 Attentional Bi-LSTM
-(2D conv on MFCC "image")    (BiLSTM + Bahdanau attention)
-  │                                  │
-  └────────────┬─────────────────────┘
-               │
-               ▼
-    Seq2Seq Autoencoder
-    (unsupervised latent space analysis)
+Raw audio (.wav)
+    │
+    ├─ load_audio()         16 kHz mono resampling
+    ├─ chunk_signal()       2-second chunks, 25% overlap
+    ├─ extract_mfcc()       40 MFCC coefficients per chunk → (40, T) matrix
+    └─ GroupShuffleSplit    leak-free train/val/test split by file ID
+            │
+            ├─ ImprovedAudioCNN       treats MFCC as 2D image (1, 40, T)
+            └─ AttentionalBiLSTM     reads MFCC as sequence + Bahdanau attention
 ```
 
----
+### Data Engineering
 
-## 📊 Results
+**Sources:**
+- **Personal recordings** - WhatsApp voice messages, 16 kHz, single speaker, high noise
+- **Google FLEURS** (`kk_kz` and `ru_ru` splits) - 44.1 kHz studio audio, 300+ speakers, resampled to 16 kHz
 
-| Model | Test Accuracy | Russian Recall |
-|---|---|---|
-| Logistic Regression | 34.4% | — |
-| Improved CNN | 80% | ~50% |
-| **Attentional Bi-LSTM** | **89%** | **88%** |
+**Streaming pipeline:** FLEURS is too large for Colab RAM, so audio is streamed from Hugging Face, resampled on the fly, and chunked.
 
-The key differentiator was **recall on Russian** — the CNN missed 170 out of 334 Russian test chunks. The attention mechanism in the LSTM allowed the model to focus on the most discriminative phonetic frames, dramatically reducing false negatives.
+**Feature extraction:** Each 2-second chunk is converted to a 40-coefficient MFCC matrix:
+1. Short-Time Fourier Transform (STFT): time domain → frequency domain
+2. Mel-scaling: linear frequencies → perceptual Mel scale
+3. DCT compression: Mel energies → compact coefficient vector
 
----
+**Preventing data leakage:** `GroupShuffleSplit` on `file_id` ensures all chunks from the same recording stay in the same split - prevents the model from "cheating" by recognizing background noise.
 
-## 🔬 Key Technical Decisions
-
-### Preventing Data Leakage
-Standard `train_test_split` would be dangerous here — chunks from the same recording could appear in both train and test sets, allowing the model to "cheat" by recognizing speaker-specific background noise. I used `GroupShuffleSplit` from scikit-learn, assigning **entire recordings** to either train or test (never both).
-
-### Data Augmentation
-- **SpecAugment-style masking**: random time and frequency masks applied to MFCC matrices during training
-- **Gaussian noise injection**: light noise added to training chunks
-
-### Why BiLSTM + Attention?
-Standard LSTMs suffer from context collapse — by the end of a 2-second chunk, early phonemes are largely forgotten. A Bidirectional LSTM processes the sequence in both directions (0→T and T→0), and the **Bahdanau attention mechanism** learns a weighted sum over all hidden states, letting the model focus on the frames that matter most for language discrimination.
-
-### Unsupervised Representation Learning
-As an additional experiment, I trained a **Seq2Seq autoencoder** (BiLSTM encoder + LSTM decoder) entirely without labels to see if the latent representations naturally separate by language. PCA visualization of the resulting "thought vectors" showed partial but meaningful clustering between Kazakh and Russian chunks — suggesting the model captures genuine acoustic structure.
+**SpecAugment:** Random frequency and time masking applied during training for regularization.
 
 ---
 
-## 📁 Repository Structure
+## Models
+
+### 1. Improved CNN
+
+Treats the MFCC spectrogram as a single-channel 2D image `(1, 40, T)`.
+
+Architecture: 2 convolutional blocks (Conv2d → BatchNorm → ReLU → MaxPool) → Global Average Pooling → FC classifier
+
+Limitation: CNNs are translation-invariant but miss temporal ordering - a key feature that distinguishes Kazakh from Russian.
+
+**Test accuracy: ~80%** | Russian recall: 0.59 (poor)
+
+### 2. Attentional Bi-LSTM ← Best model
+
+Reads the MFCC matrix as a sequence of 40-dimensional frames.
+
+**Why attention?** A standard BiLSTM compresses the entire sequence into one final hidden state `h_T`, losing information from earlier time steps. Bahdanau attention computes a weighted sum over all hidden states, letting the model focus on the most linguistically informative frames (e.g., specific phonemes or rhythmic patterns).
+
+```
+Attention score:    e_t = tanh(W · h_t)
+Attention weights:  α_t = softmax(e_t)
+Context vector:     c   = Σ α_t · h_t
+```
+
+Architecture: BiLSTM (hidden_dim=128, 2 layers, dropout=0.3) → Bahdanau attention → context vector → FC classifier
+
+**Test accuracy: 89%** | Russian recall: 0.83 (↑ from CNN's 0.59)
+
+### 3. Seq2Seq Autoencoder (Unsupervised)
+
+Encoder-Decoder LSTM trained to reconstruct MFCC sequences without labels.
+
+- Encoder: BiLSTM → fixed "thought vector"
+- Decoder: LSTM → reconstructed MFCC sequence with teacher-forcing decay
+- Loss: MSE on reconstructed vs. original MFCC frames
+
+**Result:** MSE ≈ 1.08 on test set. PCA of latent vectors shows significant cluster overlap - the model learned some structure but cannot cleanly separate the two languages without supervision. Generated audio sounded like noise (expected: MFCCs are lossy and Griffin-Lim inversion produces artifacts).
+
+---
+
+## Results
+
+| Model | Val Accuracy | Test Accuracy | Russian Recall |
+|---|---|---|---|
+| CNN (Draft 1, 15 epochs) | 73.8% | 62.4% | - |
+| CNN (2000 epochs, small data) | ~80% | ~64% | - |
+| Improved CNN (FLEURS data) | - | ~80% | 0.59 |
+| **Attentional Bi-LSTM (FLEURS data)** | - | **89%** | **0.83** |
+
+The +9% accuracy gain from CNN → AttBiLSTM is meaningful, but the more important improvement is **Russian recall**: the CNN missed 170/287 Russian test samples; the LSTM missed only 75. This validates the hypothesis that Kazakh-Russian discrimination is a **temporal** problem - the languages share similar spectral frequencies but have distinct phoneme rhythms.
+
+---
+
+## Key Findings
+
+1. **Data > model capacity.** Training a bigger model for 2,000 epochs on single-speaker data gave ~64% test accuracy. Integrating multi-speaker FLEURS data with the same architecture gave 89%. The bottleneck was data variance, not model depth.
+
+2. **Spectrograms ≠ images for speech.** The CNN's low Russian recall exposed the flaw of treating audio as a 2D image. Temporal ordering of phonemes is linguistically meaningful - an architecture that respects sequence order outperformed convolution.
+
+3. **GroupShuffleSplit is critical for chunk-based audio.** Random splitting would have inflated test accuracy by letting the model recognize speaker-specific noise across splits.
+
+---
+
+## Limitations
+
+- **Single speaker in personal data.** Even with FLEURS, the personal recordings add only one voice. Future work: collect more speakers or weight FLEURS samples higher.
+- **Autoencoder audio quality.** MFCCs discard phase; Griffin-Lim inversion introduces severe artifacts. Replacing MFCCs with Mel-Spectrograms + a vocoder (e.g., HiFi-GAN) would produce cleaner reconstructions.
+- **Code-switching.** The pipeline assumes monolingual clips. Kazakh and Russian are commonly mixed in real speech; a chunk-level classifier would fail on code-switched utterances.
+
+---
+
+## Repository Structure
 
 ```
 kazakh-russian-speech-classifier/
-├── README.md
-├── kazakh_russian_speech_classifier.ipynb   # Full pipeline
-├── requirements.txt
-└── data/
-    └── README.md                            # Dataset setup instructions
+├── kazakh_russian_speech_classifier.ipynb   # Full pipeline + experiments in appendix
+└── README.md
+```
+
+The notebook appendix contains Experiment 1 (effect of training duration) and Experiment 2 (effect of model depth/capacity), with links to the original Colab runs.
+
+> **Note:** Audio data is not included (personal voice messages + FLEURS is streamed from Hugging Face). To reproduce, replace the Google Drive paths with your own audio directory and run the streaming section to load FLEURS.
+
+---
+
+## Dependencies
+
+```
+torch
+librosa
+datasets          # Hugging Face - for FLEURS streaming
+scikit-learn
+numpy
+pandas
+matplotlib
+seaborn
+soundfile
 ```
 
 ---
 
-## 🚀 Getting Started
+## References
 
-### Prerequisites
-
-```bash
-pip install -r requirements.txt
-```
-
-### Data Setup
-
-The personal voice messages cannot be shared for privacy reasons. To reproduce this project:
-
-1. **Personal data**: Collect `.wav` voice message clips in two folders: `data/kazakh/` and `data/russian/`
-2. **FLEURS data**: Download the Kazakh and Russian subsets from [Google FLEURS](https://huggingface.co/datasets/google/fleurs) via HuggingFace
-
-See `data/README.md` for the expected directory structure.
-
-### Running the Notebook
-
-The notebook is designed to run in **Google Colab** with GPU acceleration. Open it and update the `DATA_PATH` variable to point to your Google Drive folder:
-
-```python
-kazakh_path = "/content/drive/MyDrive/data/kazakh/"
-russian_path = "/content/drive/MyDrive/data/russian/"
-```
-
----
-
-## 🧱 Tech Stack
-
-| Category | Tools |
-|---|---|
-| Audio processing | `librosa`, `soundfile`, `FFmpeg` |
-| Feature engineering | MFCCs, ZCR, Spectral Centroid, RMS |
-| Deep learning | `PyTorch` (CNN, BiLSTM, Seq2Seq) |
-| Classical ML | `scikit-learn` (Logistic Regression, GridSearchCV) |
-| Data | Google FLEURS, personal WhatsApp/Telegram voice messages |
-| Visualization | `matplotlib`, `seaborn` |
-
----
-
-## 💡 Key Learnings
-
-1. **Model capacity ≠ data variance.** Training a large model for 2,000 epochs on 40 personal recordings resulted in high validation accuracy (~97%) but catastrophic failure on out-of-distribution data — all predictions collapsed to one class. Adding FLEURS broke this degeneracy.
-
-2. **Feature aggregation discards temporal information.** Taking the mean of MFCC coefficients (standard in classical pipelines) loses the rhythm and cadence that distinguish Kazakh from Russian. The CNN and LSTM operate on the full 2D MFCC matrix, which is why they dramatically outperform logistic regression.
-
-3. **MFCCs are lossy.** The Seq2Seq autoencoder produced audio with severe phase artifacts. MFCCs discard phase information, making faithful waveform reconstruction impossible without additional techniques (e.g., Griffin-Lim, WaveNet decoder).
-
----
-
-## 📚 References
-
-- Bahdanau, D., Cho, K., & Bengio, Y. (2015). [Neural Machine Translation by Jointly Learning to Align and Translate](https://arxiv.org/abs/1409.0473)
-- Conneau, A., et al. (2023). [FLEURS: Few-Shot Learning Evaluation of Universal Representations of Speech](https://arxiv.org/abs/2205.12446)
-- Librosa Development Team. [librosa documentation](https://librosa.org/doc/latest/index.html)
-- Logan, B. (2000). [Mel Frequency Cepstral Coefficients for Music Modeling](https://ismir2000.ismir.net/papers/logan_paper.pdf)
+- Bahdanau, D., Cho, K., & Bengio, Y. (2015). [Neural machine translation by jointly learning to align and translate.](https://arxiv.org/abs/1409.0473) ICLR 2015.
+- Conneau, A., et al. (2023). [FLEURS: Few-shot learning evaluation of universal representations of speech.](https://arxiv.org/abs/2205.12446) IEEE SLT 2022.
+- McFee, B., et al. (2015). [librosa: Audio and music signal analysis in Python.](https://doi.org/10.25080/Majora-7b98e3ed-003) SciPy 2015.
+- Park, D. S., et al. (2019). [SpecAugment: A simple data augmentation method for automatic speech recognition.](https://arxiv.org/abs/1904.08779) Interspeech 2019.
