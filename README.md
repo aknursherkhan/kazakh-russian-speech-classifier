@@ -112,14 +112,27 @@ Encoder-Decoder LSTM trained to reconstruct MFCC sequences without labels.
 
 ## Results
 
-| Model | Val Accuracy | Test Accuracy | Russian Recall |
-|---|---|---|---|
-| CNN (Draft 1, 15 epochs) | 73.8% | 62.4% | - |
-| CNN (2000 epochs, small data) | ~80% | ~64% | - |
-| Improved CNN (FLEURS data) | - | ~80% | 0.59 |
-| **Attentional Bi-LSTM (FLEURS data)** | - | **89%** | **0.83** |
+**Small dataset (personal recordings only, no FLEURS):**
 
-The +9% accuracy gain from CNN → AttBiLSTM is meaningful, but the more important improvement is **Russian recall**: the CNN missed 170/287 Russian test samples; the LSTM missed only 75. This validates the hypothesis that Kazakh-Russian discrimination is a **temporal** problem - the languages share similar spectral frequencies but have distinct phoneme rhythms.
+| Experiment | Model | Best Val Acc | Test Accuracy | Gap |
+|---|---|---|---|---|
+| Draft 2 (15 epochs) | CNN | 73.8% | 62.4% | 11.4% |
+| Draft 2 (15 epochs) | LSTM | 67.7% | 55.2% | 12.5% |
+| Experiment 1 (2000 epochs) | CNN | 80.0% | 64.0% | 16.0% |
+| Experiment 1 (2000 epochs) | LSTM | 76.9% | 68.8% | 8.1% |
+| Experiment 2 (deeper models) | Improved CNN | 84.6% | 52.8% | 31.8% (severe) |
+| Experiment 2 (deeper models) | Attn. LSTM | 93.8% | 62.4% | 31.4% (severe) |
+
+More epochs and bigger models made overfitting worse, not better. The bottleneck was data variance, not model capacity.
+
+**Final pipeline (FLEURS composite dataset, 300+ speakers):**
+
+| Model | Best Val Acc | Test Accuracy | Russian Recall |
+|---|---|---|---|
+| Improved CNN | 85.0% | 80% | 0.59 |
+| **Attentional Bi-LSTM** | **92.3%** | **89%** | **0.82** |
+
+The gap between val and test accuracy collapsed once multi-speaker data was introduced. The +9% accuracy gain over CNN matters, but the more important result is **Russian recall** (0.59 to 0.82): the CNN missed 170/413 Russian test samples; the LSTM missed only 75. This validates the hypothesis that Kazakh-Russian discrimination is a **temporal** problem - the languages share similar spectral frequencies but have distinct phoneme rhythms.
 
 ---
 
